@@ -1,0 +1,5 @@
+{
+  "name": "Forest Dept Extension App",
+  "description": "A mobile-friendly app for Forest Department Extension Officers to record field activities, with an admin dashboard for monitoring and mapping.",
+  "requestFramePermissions": ["geolocation"]
+}
