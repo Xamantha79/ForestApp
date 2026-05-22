@@ -50,6 +50,20 @@ export default function OfficerDashboard() {
   const [totalPrograms, setTotalPrograms] = useState(0);
   const [statsByType, setStatsByType] = useState<{program_type: string, count: number}[]>([]);
   const [mapPrograms, setMapPrograms] = useState<Program[]>([]);
+  const [showQuickEntry, setShowQuickEntry] = useState(false);
+  const [quickEntryForm, setQuickEntryForm] = useState({
+    program_type: '',
+    description: '',
+    location_name: '',
+    latitude: '',
+    longitude: '',
+    plants_count: '',
+    participants: '',
+    aga_division: '',
+    gn_division: ''
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [programTypes, setProgramTypes] = useState<{id: number, name: string, description: string}[]>([]);
 
   const districts = [
     'Ampara', 'Anuradhapura', 'Badulla', 'Batticaloa', 'Colombo', 'Galle', 'Gampaha', 
@@ -59,14 +73,21 @@ export default function OfficerDashboard() {
   ];
 
   const getColorBase = (type: string) => {
-    switch (type) {
-      case 'planting': return 'green';
-      case 'school': return 'orange';
-      case 'home_garden': return 'red';
-      case 'community': return 'blue';
-      case 'ngo': return 'purple';
-      default: return 'gray';
+    // Generate consistent color based on type name
+    const colors = ['green', 'orange', 'red', 'blue', 'purple', 'pink', 'indigo', 'teal', 'amber', 'lime'];
+    const hash = type.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return colors[hash % colors.length];
+  };
+
+  const getProgramTypeLabel = (type: string) => {
+    const programType = programTypes.find(pt => pt.name === type);
+    if (programType) {
+      // Convert snake_case to Title Case for display
+      return programType.name.split('_').map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1)
+      ).join(' ');
     }
+    return PROGRAM_TYPES[type as keyof typeof PROGRAM_TYPES] || type;
   };
 
   const getMarkerIcon = (type: string) => {
@@ -98,6 +119,7 @@ export default function OfficerDashboard() {
       fetchRecentPrograms();
       checkOfflineData();
       fetchStats();
+      fetchProgramTypes();
     }
   }, [viewMode, filterDistrict, filterPeriod, user]);
 
@@ -111,6 +133,18 @@ export default function OfficerDashboard() {
       }
     } catch (err) {
       console.error("Failed to fetch stats", err);
+    }
+  };
+
+  const fetchProgramTypes = async () => {
+    try {
+      const res = await fetch('/api/program-types');
+      if (res.ok) {
+        const data = await res.json();
+        setProgramTypes(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch program types", err);
     }
   };
 
@@ -205,6 +239,68 @@ export default function OfficerDashboard() {
     setIsSyncing(false);
   };
 
+  const handleQuickEntrySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+
+    try {
+      const programData = {
+        program_type: quickEntryForm.program_type,
+        officer_id: user?.id,
+        date: new Date().toISOString().split('T')[0],
+        description: quickEntryForm.description,
+        location_name: quickEntryForm.location_name,
+        latitude: quickEntryForm.latitude || null,
+        longitude: quickEntryForm.longitude || null,
+        plants_count: quickEntryForm.plants_count ? parseInt(quickEntryForm.plants_count) : 0,
+        participants: quickEntryForm.participants ? parseInt(quickEntryForm.participants) : 0,
+        aga_division: quickEntryForm.aga_division || null,
+        gn_division: quickEntryForm.gn_division || null,
+        details: {}
+      };
+
+      const res = await fetch('/api/programs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(programData),
+      });
+
+      if (res.ok) {
+        // Reset form
+        setQuickEntryForm({
+          program_type: '',
+          description: '',
+          location_name: '',
+          latitude: '',
+          longitude: '',
+          plants_count: '',
+          participants: '',
+          aga_division: '',
+          gn_division: ''
+        });
+        setShowQuickEntry(false);
+        // Refresh data
+        await fetchRecentPrograms();
+        await fetchStats();
+      } else {
+        const data = await res.json();
+        alert(data.message || 'Failed to submit program');
+      }
+    } catch (err) {
+      console.error('Quick entry error:', err);
+      alert('Network error. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleQuickEntryChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    setQuickEntryForm({
+      ...quickEntryForm,
+      [e.target.name]: e.target.value
+    });
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
       {/* Header */}
@@ -250,26 +346,148 @@ export default function OfficerDashboard() {
         )}
       </div>
 
-      {/* Quick Actions */}
+      {/* Quick Entry */}
       <div className="p-6 pt-8">
-        <h2 className="text-gray-800 font-bold mb-4">Quick Entry</h2>
-        <div className="grid grid-cols-2 gap-3">
-          {Object.entries(PROGRAM_TYPES).map(([key, label]) => {
-            const color = getColorBase(key);
-            return (
-              <button 
-                key={key}
-                onClick={() => navigate(`/officer/new?type=${key}`)}
-                className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-2 hover:bg-gray-50 transition text-center"
-              >
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center bg-${color}-100 text-${color}-600`}>
-                  {key === 'planting' ? <Plus className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}
-                </div>
-                <span className="text-xs font-medium text-gray-700">{label}</span>
-              </button>
-            );
-          })}
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-gray-800 font-bold">Quick Entry</h2>
+          <button
+            onClick={() => setShowQuickEntry(!showQuickEntry)}
+            className="bg-green-700 hover:bg-green-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition shadow-md hover:shadow-lg"
+          >
+            {showQuickEntry ? 'Hide Form' : 'Add a Program'}
+          </button>
         </div>
+        
+        {showQuickEntry && (
+          <form onSubmit={handleQuickEntrySubmit} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Program Type</label>
+              <select
+                name="program_type"
+                value={quickEntryForm.program_type}
+                onChange={handleQuickEntryChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                required
+              >
+                <option value="">Select Program Type</option>
+                {programTypes.map((pt) => (
+                  <option key={pt.id} value={pt.name}>{getProgramTypeLabel(pt.name)}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+              <textarea
+                name="description"
+                value={quickEntryForm.description}
+                onChange={handleQuickEntryChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                placeholder="Program description"
+                required
+                rows={2}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Location Name</label>
+              <input
+                type="text"
+                name="location_name"
+                value={quickEntryForm.location_name}
+                onChange={handleQuickEntryChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                placeholder="Village, school, or area name"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Latitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  name="latitude"
+                  value={quickEntryForm.latitude}
+                  onChange={handleQuickEntryChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                  placeholder="7.8731"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Longitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  name="longitude"
+                  value={quickEntryForm.longitude}
+                  onChange={handleQuickEntryChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                  placeholder="80.7718"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Plants Count</label>
+                <input
+                  type="number"
+                  name="plants_count"
+                  value={quickEntryForm.plants_count}
+                  onChange={handleQuickEntryChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Participants</label>
+                <input
+                  type="number"
+                  name="participants"
+                  value={quickEntryForm.participants}
+                  onChange={handleQuickEntryChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                  placeholder="0"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">AGA Division</label>
+                <input
+                  type="text"
+                  name="aga_division"
+                  value={quickEntryForm.aga_division}
+                  onChange={handleQuickEntryChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                  placeholder="Optional"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">GN Division</label>
+                <input
+                  type="text"
+                  name="gn_division"
+                  value={quickEntryForm.gn_division}
+                  onChange={handleQuickEntryChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                  placeholder="Optional"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full bg-green-700 hover:bg-green-800 text-white font-semibold py-3 rounded-lg transition shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {submitting ? 'Submitting...' : 'Submit Program'}
+            </button>
+          </form>
+        )}
       </div>
 
       {/* View Toggle & Filters */}
@@ -312,14 +530,14 @@ export default function OfficerDashboard() {
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              {Object.entries(PROGRAM_TYPES).map(([key, label]) => {
-                const count = mapPrograms.filter(p => p.program_type === key).length;
+              {programTypes.map((pt) => {
+                const count = mapPrograms.filter(p => p.program_type === pt.name).length;
                 if (count === 0) return null;
-                const color = getColorBase(key);
+                const color = getColorBase(pt.name);
                 return (
-                  <div key={key} className={`bg-white p-2 rounded-lg border border-${color}-100 shadow-sm flex flex-col`}>
+                  <div key={pt.id} className={`bg-white p-2 rounded-lg border border-${color}-100 shadow-sm flex flex-col`}>
                     <span className={`text-xs font-medium text-${color}-600 truncate`}>
-                      {label}
+                      {getProgramTypeLabel(pt.name)}
                     </span>
                     <span className="text-lg font-semibold text-gray-800">{count}</span>
                   </div>
@@ -342,7 +560,7 @@ export default function OfficerDashboard() {
                 return (
                   <div key={stat.program_type} className={`bg-white p-2 rounded-lg border border-${color}-100 shadow-sm flex flex-col`}>
                     <span className={`text-xs font-medium text-${color}-600 truncate`}>
-                      {PROGRAM_TYPES[stat.program_type as keyof typeof PROGRAM_TYPES]}
+                      {getProgramTypeLabel(stat.program_type)}
                     </span>
                     <span className="text-lg font-semibold text-gray-800">{stat.count}</span>
                   </div>
@@ -383,7 +601,7 @@ export default function OfficerDashboard() {
                     <CheckCircle className="w-5 h-5" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-gray-900 truncate">{PROGRAM_TYPES[program.program_type]}</h3>
+                    <h3 className="font-medium text-gray-900 truncate">{getProgramTypeLabel(program.program_type)}</h3>
                     <p className="text-xs text-gray-500">
                       {program.location_name} • {program.district} • {program.date}
                     </p>

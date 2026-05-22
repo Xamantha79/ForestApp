@@ -5,6 +5,7 @@ import Register from './pages/Register';
 import OfficerDashboard from './pages/OfficerDashboard';
 import NewRecord from './pages/NewRecord';
 import AdminDashboard from './pages/AdminDashboard';
+import AdminAnalytics from './pages/AdminAnalytics';
 
 function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: 'admin' | 'officer' }) {
   const { user } = useAuth();
@@ -44,6 +45,12 @@ export default function App() {
           <Route path="/admin" element={
             <ProtectedRoute role="admin">
               <AdminDashboard />
+            </ProtectedRoute>
+          } />
+
+          <Route path="/admin/analytics" element={
+            <ProtectedRoute role="admin">
+              <AdminAnalytics />
             </ProtectedRoute>
           } />
 

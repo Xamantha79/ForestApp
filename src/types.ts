@@ -9,7 +9,7 @@ export interface User {
 
 export interface Program {
   id?: number;
-  program_type: 'school' | 'community' | 'ngo' | 'planting' | 'home_garden';
+  program_type: string;
   officer_id: number;
   date: string;
   description: string;

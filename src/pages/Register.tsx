@@ -1,6 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TreePine, UserPlus, ArrowLeft } from 'lucide-react';
+
+interface RangeForestOffice {
+  id: number;
+  name: string;
+  district_id: number;
+  district_name: string;
+  zonal_office_id: number;
+  zonal_office_name: string;
+}
 
 export default function Register() {
   const [formData, setFormData] = useState({
@@ -8,28 +17,47 @@ export default function Register() {
     password: '',
     confirmPassword: '',
     name: '',
-    district: '',
-    range_office: '',
+    range_forest_office: '',
     phone: '',
     role: 'officer'
   });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [rangeForestOffices, setRangeForestOffices] = useState<RangeForestOffice[]>([]);
+  const [selectedOffice, setSelectedOffice] = useState<RangeForestOffice | null>(null);
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const districts = [
-    'Colombo', 'Gampaha', 'Kalutara', 'Kandy', 'Matale', 'Nuwara Eliya',
-    'Galle', 'Matara', 'Hambantota', 'Jaffna', 'Kilinochchi', 'Mannar',
-    'Vavuniya', 'Mullaitivu', 'Batticaloa', 'Ampara', 'Trincomalee',
-    'Kurunegala', 'Puttalam', 'Anuradhapura', 'Polonnaruwa', 'Badulla',
-    'Moneragala', 'Ratnapura', 'Kegalle'
-  ];
+  useEffect(() => {
+    // Fetch hierarchy data on component mount
+    fetchHierarchy();
+  }, []);
+
+  const fetchHierarchy = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/hierarchy');
+      const data = await res.json();
+      setRangeForestOffices(data.range_forest_offices || []);
+    } catch (err) {
+      setError('Failed to load range forest offices');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
     setFormData({
       ...formData,
-      [e.target.name]: e.target.value
+      [name]: value
     });
+
+    // When range forest office is selected, find and display district and zonal office
+    if (name === 'range_forest_office') {
+      const selected = rangeForestOffices.find(rfo => rfo.name === value);
+      setSelectedOffice(selected || null);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -48,6 +76,11 @@ export default function Register() {
       return;
     }
 
+    if (!formData.range_forest_office) {
+      setError('Please select a range forest office');
+      return;
+    }
+
     try {
       const res = await fetch('/api/register', {
         method: 'POST',
@@ -56,8 +89,7 @@ export default function Register() {
           username: formData.username,
           password: formData.password,
           name: formData.name,
-          district: formData.district,
-          range_office: formData.range_office,
+          range_forest_office: formData.range_forest_office,
           phone: formData.phone,
           role: formData.role
         }),
@@ -117,32 +149,34 @@ export default function Register() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">District</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Range Forest Office</label>
             <select
-              name="district"
-              value={formData.district}
+              name="range_forest_office"
+              value={formData.range_forest_office}
               onChange={handleChange}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
               required
+              disabled={loading}
             >
-              <option value="">Select District</option>
-              {districts.map(district => (
-                <option key={district} value={district}>{district}</option>
+              <option value="">Select Range Forest Office</option>
+              {rangeForestOffices.map((rfo) => (
+                <option key={rfo.id} value={rfo.name}>
+                  {rfo.name}
+                </option>
               ))}
             </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Range Office</label>
-            <input
-              type="text"
-              name="range_office"
-              value={formData.range_office}
-              onChange={handleChange}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
-              placeholder="Range office name"
-              required
-            />
+            {selectedOffice && (
+              <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-100">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-medium text-green-800">District:</span>
+                  <span className="text-green-700">{selectedOffice.district_name}</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm mt-1">
+                  <span className="font-medium text-green-800">Zonal Office:</span>
+                  <span className="text-green-700">{selectedOffice.zonal_office_name}</span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div>

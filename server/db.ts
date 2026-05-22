@@ -8,127 +8,203 @@ const db = mysql.createPool({
   queueLimit: 0
 });
 
-// Initialize tables
+// Initialize normalized tables
 async function initializeTables() {
   try {
+    // Check if we need to migrate from old schema
+    const needsMigration = await migrateFromOldSchema();
+
+    // Zonal Offices lookup table (top level)
     await db.execute(`
-      CREATE TABLE IF NOT EXISTS officers (
+      CREATE TABLE IF NOT EXISTS zonal_offices (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(255) UNIQUE,
-        password VARCHAR(255),
-        name VARCHAR(255),
-        district VARCHAR(100),
-        range_office VARCHAR(100),
-        phone VARCHAR(50),
-        role ENUM('officer', 'admin') DEFAULT 'officer'
+        name VARCHAR(100) UNIQUE NOT NULL,
+        code VARCHAR(20) UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )
     `);
 
+    // Districts lookup table (linked to zonal offices)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS districts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) UNIQUE NOT NULL,
+        zonal_office_id INT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (zonal_office_id) REFERENCES zonal_offices(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE
+      )
+    `);
+
+    // Range Forest Offices lookup table (linked to districts)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS range_forest_offices (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        district_id INT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (district_id) REFERENCES districts(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+        UNIQUE KEY unique_range_forest_office (name, district_id)
+      )
+    `);
+
+    // Program Types lookup table
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS program_types (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(50) UNIQUE NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Officers table (normalized - only stores range_forest_office_id)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS officers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        range_forest_office_id INT,
+        phone VARCHAR(50),
+        role ENUM('officer', 'admin') DEFAULT 'officer',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (range_forest_office_id) REFERENCES range_forest_offices(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE
+      )
+    `);
+
+    // Programs table (normalized - only stores officer_id, zonal_office_id and district_id inferred through joins)
     await db.execute(`
       CREATE TABLE IF NOT EXISTS programs (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        program_type ENUM('school', 'community', 'ngo', 'planting', 'home_garden'),
+        program_type_id INT,
         officer_id INT,
         date DATE,
         description TEXT,
         latitude DECIMAL(10,6),
         longitude DECIMAL(10,6),
         location_name VARCHAR(255),
-        district VARCHAR(100),
-        participants INT,
+        aga_division VARCHAR(100),
+        gn_division VARCHAR(100),
+        plants_count INT DEFAULT 0,
+        participants INT DEFAULT 0,
         details JSON,
         synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (program_type_id) REFERENCES program_types(id)
+        ON DELETE RESTRICT
+        ON UPDATE CASCADE,
         FOREIGN KEY (officer_id) REFERENCES officers(id)
         ON DELETE SET NULL
         ON UPDATE CASCADE
       )
     `);
+
+    console.log('Tables initialized successfully');
   } catch (error) {
     console.error('Error initializing tables:', error);
   }
 }
 
-// Seed data if empty
-async function seedData() {
+// Migrate from old schema to new normalized schema
+async function migrateFromOldSchema(): Promise<boolean> {
   try {
-    const [rows] = await db.execute('SELECT COUNT(*) as count FROM officers');
-    const result = rows as any[];
+    let needsMigration = false;
+
+    // Check if officers table has zonal_office_id column (indicates old schema)
+    const [officerColumns] = await db.execute(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'officers' 
+      AND COLUMN_NAME = 'zonal_office_id'
+    `);
     
-    if (result[0].count === 0) {
-      // Admin
-      await db.execute(`
-        INSERT INTO officers (username, password, name, district, range_office, phone, role)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['admin', 'admin123', 'Headquarters Admin', 'Colombo', 'HQ', '0112345678', 'admin']);
-
-      // Officers
-      await db.execute(`
-        INSERT INTO officers (username, password, name, district, range_office, phone, role)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['officer1', 'pass123', 'Saman Perera', 'Kandy', 'Ududumbara', '0771234567', 'officer']);
+    if ((officerColumns as any[]).length > 0) {
+      console.log('Detected old schema (officers table has zonal_office_id), starting migration...');
       
-      await db.execute(`
-        INSERT INTO officers (username, password, name, district, range_office, phone, role)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['officer2', 'pass123', 'Kamal Silva', 'Anuradhapura', 'Mihintale', '0719876543', 'officer']);
+      // Backup old data if possible
+      try {
+        const [oldOfficers] = await db.execute('SELECT * FROM officers');
+        const [oldPrograms] = await db.execute('SELECT * FROM programs');
+        (global as any).oldOfficersData = oldOfficers;
+        (global as any).oldProgramsData = oldPrograms;
+      } catch (e) {
+        console.log('Could not backup old data, proceeding with fresh start');
+      }
       
-      await db.execute(`
-        INSERT INTO officers (username, password, name, district, range_office, phone, role)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['officer3', 'pass123', 'Nimali Fernando', 'Galle', 'Kanneliya', '0765554444', 'officer']);
+      // Drop old tables
+      await db.execute('DROP TABLE IF EXISTS programs');
+      await db.execute('DROP TABLE IF EXISTS officers');
+      await db.execute('DROP TABLE IF EXISTS range_offices');
+      await db.execute('DROP TABLE IF EXISTS districts');
+      await db.execute('DROP TABLE IF EXISTS program_types');
       
-      await db.execute(`
-        INSERT INTO officers (username, password, name, district, range_office, phone, role)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['officer4', 'pass123', 'Sunil Perera', 'Gampaha', 'Kadawala', '0777777777', 'officer']);
+      console.log('Old tables dropped, will recreate with new zonal hierarchy schema');
       
-      // Islandwide Officer (Generic Account for 170 officers)
-      await db.execute(`
-        INSERT INTO officers (username, password, name, district, range_office, phone, role)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['officer', 'officer123', 'Extension Officer', 'Islandwide', 'General', '0000000000', 'officer']);
-
-      // Seed some programs
-      await db.execute(`
-        INSERT INTO programs (program_type, officer_id, date, description, latitude, longitude, location_name, district, participants, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, ['school', 2, '2023-10-15', 'Awareness on forest conservation', 7.2906, 80.6337, 'Dharmaraja College', 'Kandy', 150, JSON.stringify({ school_name: 'Dharmaraja College', district: 'Kandy' })]);
-
-      await db.execute(`
-        INSERT INTO programs (program_type, officer_id, date, description, latitude, longitude, location_name, district, participants, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, ['home_garden', 4, '2023-11-05', 'Distributed fruit plants', 7.0000, 79.9500, 'Kadawala Village', 'Gampaha', 20, JSON.stringify({ household: 'Jayasinghe Family' })]);
-
-      await db.execute(`
-        INSERT INTO programs (program_type, officer_id, date, description, latitude, longitude, location_name, district, participants, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, ['planting', 3, '2023-10-20', 'Teak planting project', 8.3114, 80.4037, 'Mihintale Reserve', 'Anuradhapura', 50, JSON.stringify({ tree_species: 'Teak', number_planted: 200, area_size: '2 acres' })]);
+      needsMigration = true;
     }
+
+    // Check if programs table has zonal_office_id or district_id columns (indicates old programs schema)
+    const [programColumns] = await db.execute(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'programs' 
+      AND (COLUMN_NAME = 'zonal_office_id' OR COLUMN_NAME = 'district_id')
+    `);
+    
+    if ((programColumns as any[]).length > 0) {
+      console.log('Detected old programs schema (has zonal_office_id or district_id), starting migration...');
+      
+      try {
+        // Drop foreign key constraints first
+        await db.execute('ALTER TABLE programs DROP FOREIGN KEY programs_ibfk_3');
+        await db.execute('ALTER TABLE programs DROP FOREIGN KEY programs_ibfk_4');
+      } catch (e) {
+        // Foreign keys might not exist or have different names
+      }
+
+      // Drop the columns
+      try {
+        await db.execute('ALTER TABLE programs DROP COLUMN zonal_office_id');
+      } catch (e) {
+        console.log('Could not drop zonal_office_id (might not exist)');
+      }
+      try {
+        await db.execute('ALTER TABLE programs DROP COLUMN district_id');
+      } catch (e) {
+        console.log('Could not drop district_id (might not exist)');
+      }
+      
+      console.log('Programs schema migration completed successfully');
+      needsMigration = true;
+    }
+
+    return needsMigration;
   } catch (error) {
-    console.error('Error seeding database:', error);
+    // If table doesn't exist or other error, ignore
+    console.log('Migration check completed (no old schema found)');
+    return false;
   }
 }
 
-// Ensure the 'officer' user exists (for updates to existing DBs)
-async function ensureOfficerExists() {
-  try {
-    const [rows] = await db.execute('SELECT id FROM officers WHERE username = ?', ['officer']);
-    const result = rows as any[];
-    
-    if (result.length === 0) {
-      await db.execute(`
-        INSERT INTO officers (username, password, name, district, range_office, phone, role)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['officer', 'officer123', 'Extension Officer', 'Islandwide', 'General', '0000000000', 'officer']);
-    }
-  } catch (error) {
-    console.error('Error ensuring officer exists:', error);
-  }
+// Initialize tables on startup (data comes from Railway MySQL)
+async function startDatabase() {
+  await initializeTables();
 }
 
-// Initialize tables and seed data on startup
-initializeTables();
-setTimeout(seedData, 1000);
-setTimeout(ensureOfficerExists, 2000);
+startDatabase();
 
 export default db;

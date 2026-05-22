@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Tooltip as MapTooltip, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Program, PROGRAM_TYPES } from '../types';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { LogOut, Filter, Download, MapPin } from 'lucide-react';
+import { Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { LogOut, Download, MapPin, Plus, Trash2, X, BarChart3 } from 'lucide-react';
 import L from 'leaflet';
 
 // Fix Leaflet marker icons
@@ -29,7 +29,7 @@ function MapUpdater({ programs }: { programs: Program[] }) {
       );
       
       if (validPoints.length > 0) {
-        const bounds = L.latLngBounds(validPoints.map(p => [p.latitude, p.longitude]));
+        const bounds = L.latLngBounds(validPoints.map(p => [Number(p.latitude), Number(p.longitude)]));
         map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
       }
     }
@@ -39,19 +39,13 @@ function MapUpdater({ programs }: { programs: Program[] }) {
 
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [programs, setPrograms] = useState<Program[]>([]);
   const [stats, setStats] = useState<any>(null);
-  const [filterDistrict, setFilterDistrict] = useState('');
-  const [filterRange, setFilterRange] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-
-  const districts = [
-    'Ampara', 'Anuradhapura', 'Badulla', 'Batticaloa', 'Colombo', 'Galle', 'Gampaha', 
-    'Hambantota', 'Jaffna', 'Kalutara', 'Kandy', 'Kegalle', 'Kilinochchi', 'Kurunegala', 
-    'Mannar', 'Matale', 'Matara', 'Monaragala', 'Mullaitivu', 'Nuwara Eliya', 'Polonnaruwa', 
-    'Puttalam', 'Ratnapura', 'Trincomalee', 'Vavuniya'
-  ];
+  const [programTypes, setProgramTypes] = useState<any[]>([]);
+  const [showProgramTypeForm, setShowProgramTypeForm] = useState(false);
+  const [newProgramType, setNewProgramType] = useState({ name: '', description: '' });
+  const [loading, setLoading] = useState(false);
 
   const getMarkerIcon = (type: string) => {
     let color = 'grey';
@@ -74,6 +68,19 @@ export default function AdminDashboard() {
     });
   };
 
+  const getProgramTypeLabel = (type: string | null | undefined) => {
+    if (!type) return 'Unknown';
+    const programType = programTypes.find(pt => pt.name === type);
+    if (programType) {
+      return programType.name.split('_').map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1)
+      ).join(' ');
+    }
+    return PROGRAM_TYPES[type as keyof typeof PROGRAM_TYPES] || type.split('_').map(word =>
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
+  };
+
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
 
   useEffect(() => {
@@ -85,18 +92,13 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchData();
-  }, [filterDistrict, filterRange, startDate, endDate]);
+    fetchProgramTypes();
+  }, []);
 
   const fetchData = async () => {
     try {
-      let query = '?';
-      if (filterDistrict) query += `district=${filterDistrict}&`;
-      if (filterRange) query += `range=${filterRange}&`;
-      if (startDate) query += `start_date=${startDate}&`;
-      if (endDate) query += `end_date=${endDate}&`;
-      
       const [progRes, statRes] = await Promise.all([
-        fetch(`/api/programs${query}`),
+        fetch('/api/programs'),
         fetch('/api/stats')
       ]);
 
@@ -108,11 +110,73 @@ export default function AdminDashboard() {
     }
   };
 
+  const fetchProgramTypes = async () => {
+    try {
+      const res = await fetch('/api/program-types');
+      if (res.ok) {
+        setProgramTypes(await res.json());
+      }
+    } catch (err) {
+      console.error("Error fetching program types", err);
+    }
+  };
+
+  const handleCreateProgramType = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await fetch('/api/program-types', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newProgramType),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setNewProgramType({ name: '', description: '' });
+        setShowProgramTypeForm(false);
+        await fetchProgramTypes();
+        await fetchData();
+      } else {
+        alert(data.message || 'Failed to create program type');
+      }
+    } catch (err) {
+      console.error('Error creating program type:', err);
+      alert('Network error. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteProgramType = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this program type?')) return;
+    try {
+      const res = await fetch(`/api/program-types/${id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchProgramTypes();
+        await fetchData();
+      } else {
+        alert(data.message || 'Failed to delete program type');
+      }
+    } catch (err) {
+      console.error('Error deleting program type:', err);
+      alert('Network error. Please try again.');
+    }
+  };
+
   // Prepare chart data
   const typeData = stats?.byType.map((item: any) => ({
-    name: PROGRAM_TYPES[item.program_type as keyof typeof PROGRAM_TYPES],
+    name: getProgramTypeLabel(item.program_type),
     value: item.count
   })) || [];
+
+  const programTypeSummary = programs.reduce<Record<string, number>>((acc, p) => {
+    const key = p.program_type || 'unknown';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
@@ -128,8 +192,15 @@ export default function AdminDashboard() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-500 hidden sm:block">Welcome, {user?.name}</span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/admin/analytics')}
+              className="flex items-center gap-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition shadow-sm"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span className="hidden sm:inline">View Analytics</span>
+            </button>
+            <span className="text-sm text-gray-500 hidden md:block">Welcome, {user?.name}</span>
             <button onClick={logout} className="text-gray-500 hover:text-red-600">
               <LogOut className="w-5 h-5" />
             </button>
@@ -138,67 +209,6 @@ export default function AdminDashboard() {
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-        
-        {/* Filter Bar */}
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-wrap gap-4 items-center">
-          <div className="flex items-center gap-2 text-gray-500">
-            <Filter className="w-5 h-5" />
-            <span className="font-medium">Filters:</span>
-          </div>
-          
-          <div className="flex-1 min-w-[200px]">
-            <select 
-              className="w-full p-2 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-green-500 outline-none"
-              value={filterDistrict}
-              onChange={(e) => setFilterDistrict(e.target.value)}
-            >
-              <option value="">All Districts</option>
-              {districts.map(d => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex-1 min-w-[200px]">
-            <input 
-              type="text"
-              className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none"
-              value={filterRange}
-              onChange={(e) => setFilterRange(e.target.value)}
-              placeholder="Search Range Office (e.g. Kadawala)"
-            />
-          </div>
-
-          <div className="flex gap-2">
-            <input 
-              type="date"
-              className="p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-            />
-            <span className="self-center text-gray-400">-</span>
-            <input 
-              type="date"
-              className="p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-            />
-          </div>
-
-          {(filterDistrict || filterRange || startDate || endDate) && (
-            <button 
-              onClick={() => {
-                setFilterDistrict('');
-                setFilterRange('');
-                setStartDate('');
-                setEndDate('');
-              }}
-              className="text-sm text-red-600 hover:text-red-700 font-medium px-2"
-            >
-              Clear
-            </button>
-          )}
-        </div>
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -207,10 +217,103 @@ export default function AdminDashboard() {
             <p className="text-3xl font-bold text-gray-900 mt-2">{stats?.total || 0}</p>
           </div>
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <h3 className="text-gray-500 text-sm font-medium">Active Districts</h3>
-            <p className="text-3xl font-bold text-green-600 mt-2">{stats?.byDistrict.length || 0}</p>
+            <h3 className="text-gray-500 text-sm font-medium">Trees Planted</h3>
+            <p className="text-3xl font-bold text-green-600 mt-2">{stats?.totalTrees || 0}</p>
           </div>
-          {/* Add more stats as needed */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <h3 className="text-gray-500 text-sm font-medium">Active Districts</h3>
+            <p className="text-3xl font-bold text-blue-600 mt-2">{stats?.byDistrict.length || 0}</p>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <h3 className="text-gray-500 text-sm font-medium">Program Types</h3>
+            <p className="text-3xl font-bold text-purple-600 mt-2">{programTypes.length}</p>
+          </div>
+        </div>
+
+        {/* Program Types Management */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+            <h2 className="font-bold text-gray-800">Program Types</h2>
+            <button
+              onClick={() => setShowProgramTypeForm(!showProgramTypeForm)}
+              className="bg-green-700 hover:bg-green-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition shadow-md hover:shadow-lg flex items-center gap-2"
+            >
+              {showProgramTypeForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+              {showProgramTypeForm ? 'Cancel' : 'Add Program Type'}
+            </button>
+          </div>
+
+          {showProgramTypeForm && (
+            <div className="p-6 bg-gray-50 border-b border-gray-100">
+              <form onSubmit={handleCreateProgramType} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Program Type Name</label>
+                    <input
+                      type="text"
+                      value={newProgramType.name}
+                      onChange={(e) => setNewProgramType({ ...newProgramType, name: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                      placeholder="e.g., workshop, training"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <input
+                      type="text"
+                      value={newProgramType.description}
+                      onChange={(e) => setNewProgramType({ ...newProgramType, description: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                      placeholder="Brief description"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="bg-green-700 hover:bg-green-800 text-white font-medium px-4 py-2 rounded-lg transition shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? 'Creating...' : 'Create Program Type'}
+                </button>
+              </form>
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-gray-50 text-gray-500 font-medium">
+                <tr>
+                  <th className="px-6 py-3">ID</th>
+                  <th className="px-6 py-3">Name</th>
+                  <th className="px-6 py-3">Description</th>
+                  <th className="px-6 py-3">Programs Count</th>
+                  <th className="px-6 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {programTypes.map((type) => (
+                  <tr key={type.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-3 text-gray-900">{type.id}</td>
+                    <td className="px-6 py-3 font-medium text-gray-900">{type.name}</td>
+                    <td className="px-6 py-3 text-gray-600">{type.description || '-'}</td>
+                    <td className="px-6 py-3 text-gray-600">
+                      {programs.filter(p => p.program_type === type.name).length}
+                    </td>
+                    <td className="px-6 py-3">
+                      <button
+                        onClick={() => handleDeleteProgramType(type.id)}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50 p-2 rounded-lg transition"
+                        title="Delete Program Type"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Map & Charts Row */}
@@ -234,18 +337,20 @@ export default function AdminDashboard() {
                   attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
                   url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 />
-                {programs.map((prog) => (
-                  <Marker 
-                    key={prog.id} 
-                    position={[prog.latitude, prog.longitude]}
-                    icon={getMarkerIcon(prog.program_type)}
-                  >
+                {programs
+                  .filter(prog => prog.latitude != null && prog.longitude != null && !isNaN(Number(prog.latitude)) && !isNaN(Number(prog.longitude)))
+                  .map((prog) => (
+                    <Marker 
+                      key={prog.id} 
+                      position={[Number(prog.latitude), Number(prog.longitude)]}
+                      icon={getMarkerIcon(prog.program_type)}
+                    >
                     <MapTooltip>
-                      <span>{PROGRAM_TYPES[prog.program_type]} - {prog.location_name}</span>
+                      <span>{getProgramTypeLabel(prog.program_type)} - {prog.location_name}</span>
                     </MapTooltip>
                     <Popup>
                       <div className="p-1">
-                        <strong className="block text-sm text-green-700">{PROGRAM_TYPES[prog.program_type]}</strong>
+                        <strong className="block text-sm text-green-700">{getProgramTypeLabel(prog.program_type)}</strong>
                         <span className="text-xs text-gray-600">{prog.location_name}</span><br/>
                         <span className="text-xs text-gray-500">{prog.date} • {prog.officer_name}</span>
                       </div>
@@ -296,10 +401,7 @@ export default function AdminDashboard() {
           {/* Summary Counts */}
           <div className="px-6 py-3 bg-gray-50/50 border-b border-gray-100 flex flex-wrap gap-4 items-center">
             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Summary:</span>
-            {Object.entries(PROGRAM_TYPES).map(([key, label]) => {
-              const count = programs.filter(p => p.program_type === key).length;
-              if (count === 0) return null;
-              
+            {Object.entries(programTypeSummary).map(([key, count]) => {
               let colorClass = 'bg-gray-500';
               if (key === 'planting') colorClass = 'bg-green-500';
               else if (key === 'school') colorClass = 'bg-orange-500';
@@ -310,7 +412,7 @@ export default function AdminDashboard() {
               return (
                 <div key={key} className="flex items-center gap-2 text-sm">
                   <span className={`w-2 h-2 rounded-full ${colorClass}`} />
-                  <span className="text-gray-600">{label}:</span>
+                  <span className="text-gray-600">{getProgramTypeLabel(key)}:</span>
                   <span className="font-semibold text-gray-900">{count}</span>
                 </div>
               );
@@ -340,8 +442,11 @@ export default function AdminDashboard() {
                     <td className="px-6 py-3">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium
                         ${prog.program_type === 'planting' ? 'bg-green-100 text-green-700' : 
-                          prog.program_type === 'school' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}`}>
-                        {PROGRAM_TYPES[prog.program_type]}
+                          prog.program_type === 'school' ? 'bg-orange-100 text-orange-700' : 
+                          prog.program_type === 'home_garden' ? 'bg-red-100 text-red-700' :
+                          prog.program_type === 'community' ? 'bg-blue-100 text-blue-700' :
+                          prog.program_type === 'ngo' ? 'bg-violet-100 text-violet-700' : 'bg-gray-100 text-gray-700'}`}>
+                        {getProgramTypeLabel(prog.program_type)}
                       </span>
                     </td>
                     <td className="px-6 py-3 text-gray-600">{prog.location_name}</td>
