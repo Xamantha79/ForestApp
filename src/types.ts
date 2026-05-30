@@ -21,6 +21,7 @@ export interface Program {
   gn_division?: string;
   plants_count?: number;
   participants: number;
+  cost?: number;
   details: Record<string, any>;
   officer_name?: string;
 }

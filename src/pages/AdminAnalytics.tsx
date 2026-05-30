@@ -14,6 +14,7 @@ import {
   MapPin,
   Activity,
   UserX,
+  Banknote,
 } from 'lucide-react';
 import {
   BarChart,
@@ -31,22 +32,28 @@ import {
   Line,
 } from 'recharts';
 
-const COLORS = ['#15803d', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', '#64748b', '#ec4899', '#14b8a6'];
+import {
+  getProgramTypeColor,
+  getProgramTypeBadgeStyle,
+  getProgramTypeDotStyle,
+  registerProgramTypes,
+} from '../utils/programTypeColors';
 
 interface AnalyticsData {
   summary: {
     totalPrograms: number;
     totalTrees: number;
     totalParticipants: number;
+    totalCost: number;
     activeOfficers: number;
     activeDays: number;
     firstDate: string | null;
     lastDate: string | null;
   };
-  byType: { program_type: string; count: number; trees: number; participants: number }[];
-  byDistrict: { district: string; count: number; trees: number }[];
-  byZonal: { zonal_office: string; count: number }[];
-  byRange: { range_office: string; count: number; trees: number }[];
+  byType: { program_type: string; count: number; trees: number; participants: number; cost: number }[];
+  byDistrict: { district: string; count: number; trees: number; cost: number }[];
+  byZonal: { zonal_office: string; count: number; cost: number }[];
+  byRange: { range_office: string; count: number; trees: number; cost: number }[];
   byOfficer: {
     officer_id: number;
     officer_name: string;
@@ -55,11 +62,12 @@ interface AnalyticsData {
     count: number;
     trees: number;
     participants: number;
+    cost: number;
     first_activity: string;
     last_activity: string;
     active_days: number;
   }[];
-  byMonth: { year: number; month: number; count: number; trees: number; participants: number }[];
+  byMonth: { year: number; month: number; count: number; trees: number; participants: number; cost: number }[];
   activityLog: {
     id: number;
     date: string;
@@ -68,6 +76,7 @@ interface AnalyticsData {
     description: string;
     plants_count: number;
     participants: number;
+    cost: number;
     officer_id: number;
     officer_name: string;
     range_forest_office: string;
@@ -78,6 +87,15 @@ interface AnalyticsData {
 }
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatCost(amount: number) {
+  return new Intl.NumberFormat('en-LK', {
+    style: 'currency',
+    currency: 'LKR',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount || 0);
+}
 
 export default function AdminAnalytics() {
   const { user, logout } = useAuth();
@@ -103,6 +121,14 @@ export default function AdminAnalytics() {
   const [filterEnd, setFilterEnd] = useState('');
   const [activeTab, setActiveTab] = useState<'officers' | 'geography' | 'activity' | 'inactive'>('officers');
   const [activityFilter, setActivityFilter] = useState('');
+
+  useMemo(() => {
+    registerProgramTypes([
+      ...programTypes.map((t) => t.name),
+      ...(data?.byType?.map((t) => t.program_type) || []),
+      ...(data?.activityLog?.map((a) => a.program_type) || []),
+    ]);
+  }, [programTypes, data]);
 
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: 8 }, (_, i) => currentYear - i);
@@ -191,6 +217,7 @@ export default function AdminAnalytics() {
         programs: m.count,
         trees: m.trees,
         participants: m.participants,
+        cost: Number(m.cost) || 0,
       })),
     [data?.byMonth]
   );
@@ -200,17 +227,34 @@ export default function AdminAnalytics() {
       (data?.byType || []).map((t) => ({
         name: getProgramTypeLabel(t.program_type),
         value: t.count,
+        type: t.program_type,
+        color: getProgramTypeColor(t.program_type),
       })),
     [data?.byType, programTypes]
   );
 
-  const topOfficersChart = useMemo(
+  const costByTypeChart = useMemo(
     () =>
-      (data?.byOfficer || []).slice(0, 10).map((o) => ({
-        name: o.officer_name?.split(' ')[0] || 'Unknown',
-        programs: o.count,
-        trees: o.trees,
-      })),
+      (data?.byType || [])
+        .filter((t) => Number(t.cost) > 0)
+        .map((t) => ({
+          name: getProgramTypeLabel(t.program_type),
+          type: t.program_type,
+          color: getProgramTypeColor(t.program_type),
+          cost: Number(t.cost) || 0,
+        })),
+    [data?.byType, programTypes]
+  );
+
+  const topOfficersByCost = useMemo(
+    () =>
+      [...(data?.byOfficer || [])]
+        .sort((a, b) => (Number(b.cost) || 0) - (Number(a.cost) || 0))
+        .slice(0, 10)
+        .map((o) => ({
+          name: o.officer_name?.split(' ')[0] || 'Unknown',
+          cost: Number(o.cost) || 0,
+        })),
     [data?.byOfficer]
   );
 
@@ -339,9 +383,10 @@ export default function AdminAnalytics() {
         ) : data ? (
           <>
             {/* Summary */}
-            <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
               {[
                 { label: 'Total Programs', value: data.summary.totalPrograms, icon: Activity, color: 'text-gray-900' },
+                { label: 'Total Cost', value: formatCost(data.summary.totalCost), icon: Banknote, color: 'text-amber-700' },
                 { label: 'Trees Planted', value: data.summary.totalTrees, icon: TreePine, color: 'text-green-600' },
                 { label: 'Participants', value: data.summary.totalParticipants, icon: Users, color: 'text-blue-600' },
                 { label: 'Active Officers', value: data.summary.activeOfficers, icon: Users, color: 'text-purple-600' },
@@ -398,8 +443,8 @@ export default function AdminAnalytics() {
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie data={typeChartData} dataKey="value" cx="50%" cy="50%" innerRadius={50} outerRadius={70} paddingAngle={4}>
-                          {typeChartData.map((_, i) => (
-                            <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                          {typeChartData.map((entry, i) => (
+                            <Cell key={entry.type || entry.name || i} fill={entry.color} />
                           ))}
                         </Pie>
                         <Tooltip />
@@ -416,9 +461,12 @@ export default function AdminAnalytics() {
             <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
               <h3 className="font-bold text-gray-800 mb-4">Top 10 Officers by Submissions</h3>
               <div className="h-56">
-                {topOfficersChart.length > 0 ? (
+                {(data?.byOfficer || []).slice(0, 10).length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={topOfficersChart} layout="vertical" margin={{ left: 20 }}>
+                    <BarChart data={(data?.byOfficer || []).slice(0, 10).map((o) => ({
+                      name: o.officer_name?.split(' ')[0] || 'Unknown',
+                      programs: o.count,
+                    }))} layout="vertical" margin={{ left: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis type="number" />
                       <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11 }} />
@@ -431,6 +479,68 @@ export default function AdminAnalytics() {
                 )}
               </div>
             </section>
+
+            {/* Cost charts */}
+            <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="font-bold text-gray-800 mb-4">Monthly Program Cost</h3>
+                <div className="h-64">
+                  {monthChartData.some((m) => m.cost > 0) ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={monthChartData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                        <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip formatter={(value: number) => formatCost(value)} />
+                        <Bar dataKey="cost" fill="#d97706" name="Cost (LKR)" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-gray-400 text-sm text-center py-12">No cost data for selected filters</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="font-bold text-gray-800 mb-4">Cost by Program Type</h3>
+                <div className="h-64">
+                  {costByTypeChart.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={costByTypeChart}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={60} />
+                        <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip formatter={(value: number) => formatCost(value)} />
+                        <Bar dataKey="cost" name="Cost (LKR)" radius={[4, 4, 0, 0]}>
+                          {costByTypeChart.map((entry, i) => (
+                            <Cell key={entry.type || entry.name || i} fill={entry.color} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-gray-400 text-sm text-center py-12">No cost data by type</p>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            {topOfficersByCost.some((o) => o.cost > 0) && (
+              <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="font-bold text-gray-800 mb-4">Top 10 Officers by Total Cost</h3>
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={topOfficersByCost.filter((o) => o.cost > 0)} layout="vertical" margin={{ left: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                      <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={(value: number) => formatCost(value)} />
+                      <Bar dataKey="cost" fill="#d97706" name="Cost (LKR)" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+            )}
 
             {/* Tabbed tables */}
             <section className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -467,6 +577,7 @@ export default function AdminAnalytics() {
                         <th className="px-4 py-2">Programs</th>
                         <th className="px-4 py-2">Trees</th>
                         <th className="px-4 py-2">Participants</th>
+                        <th className="px-4 py-2">Total Cost</th>
                         <th className="px-4 py-2">Active Days</th>
                         <th className="px-4 py-2">First</th>
                         <th className="px-4 py-2">Last</th>
@@ -474,7 +585,7 @@ export default function AdminAnalytics() {
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {data.byOfficer.length === 0 ? (
-                        <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">No results</td></tr>
+                        <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400">No results</td></tr>
                       ) : (
                         data.byOfficer.map((o) => (
                           <tr key={o.officer_id} className="hover:bg-gray-50">
@@ -484,6 +595,7 @@ export default function AdminAnalytics() {
                             <td className="px-4 py-2 font-semibold">{o.count}</td>
                             <td className="px-4 py-2">{o.trees}</td>
                             <td className="px-4 py-2">{o.participants}</td>
+                            <td className="px-4 py-2 font-medium text-amber-700">{formatCost(Number(o.cost) || 0)}</td>
                             <td className="px-4 py-2">{o.active_days}</td>
                             <td className="px-4 py-2 text-gray-500">{o.first_activity || '—'}</td>
                             <td className="px-4 py-2 text-gray-500">{o.last_activity || '—'}</td>
@@ -499,13 +611,14 @@ export default function AdminAnalytics() {
                     <div>
                       <h4 className="font-semibold text-gray-700 mb-2">By District</h4>
                       <table className="w-full text-sm">
-                        <thead><tr className="text-gray-500"><th className="text-left py-1">District</th><th className="text-right py-1">Count</th><th className="text-right py-1">Trees</th></tr></thead>
+                        <thead><tr className="text-gray-500"><th className="text-left py-1">District</th><th className="text-right py-1">Count</th><th className="text-right py-1">Trees</th><th className="text-right py-1">Cost</th></tr></thead>
                         <tbody>
                           {data.byDistrict.map((d) => (
                             <tr key={d.district} className="border-t border-gray-50">
                               <td className="py-1.5">{d.district || 'Unknown'}</td>
                               <td className="text-right font-medium">{d.count}</td>
                               <td className="text-right text-green-700">{d.trees}</td>
+                              <td className="text-right text-amber-700">{formatCost(Number(d.cost) || 0)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -514,12 +627,13 @@ export default function AdminAnalytics() {
                     <div>
                       <h4 className="font-semibold text-gray-700 mb-2">By Zonal Office</h4>
                       <table className="w-full text-sm">
-                        <thead><tr className="text-gray-500"><th className="text-left py-1">Zone</th><th className="text-right py-1">Count</th></tr></thead>
+                        <thead><tr className="text-gray-500"><th className="text-left py-1">Zone</th><th className="text-right py-1">Count</th><th className="text-right py-1">Cost</th></tr></thead>
                         <tbody>
                           {data.byZonal.map((z) => (
                             <tr key={z.zonal_office} className="border-t border-gray-50">
                               <td className="py-1.5">{z.zonal_office || 'Unknown'}</td>
                               <td className="text-right font-medium">{z.count}</td>
+                              <td className="text-right text-amber-700">{formatCost(Number(z.cost) || 0)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -528,13 +642,14 @@ export default function AdminAnalytics() {
                     <div>
                       <h4 className="font-semibold text-gray-700 mb-2">By Range Office</h4>
                       <table className="w-full text-sm">
-                        <thead><tr className="text-gray-500"><th className="text-left py-1">Range</th><th className="text-right py-1">Count</th><th className="text-right py-1">Trees</th></tr></thead>
+                        <thead><tr className="text-gray-500"><th className="text-left py-1">Range</th><th className="text-right py-1">Count</th><th className="text-right py-1">Trees</th><th className="text-right py-1">Cost</th></tr></thead>
                         <tbody>
                           {data.byRange.map((r) => (
                             <tr key={r.range_office} className="border-t border-gray-50">
                               <td className="py-1.5">{r.range_office || 'Unknown'}</td>
                               <td className="text-right font-medium">{r.count}</td>
                               <td className="text-right text-green-700">{r.trees}</td>
+                              <td className="text-right text-amber-700">{formatCost(Number(r.cost) || 0)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -565,18 +680,22 @@ export default function AdminAnalytics() {
                           <th className="px-4 py-2">District</th>
                           <th className="px-4 py-2">Trees</th>
                           <th className="px-4 py-2">Participants</th>
+                          <th className="px-4 py-2">Cost</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {filteredActivity.length === 0 ? (
-                          <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No activity found</td></tr>
+                          <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">No activity found</td></tr>
                         ) : (
                           filteredActivity.map((a) => (
                             <tr key={a.id} className="hover:bg-gray-50">
                               <td className="px-4 py-2 whitespace-nowrap">{a.date}</td>
                               <td className="px-4 py-2 font-medium">{a.officer_name || '—'}</td>
                               <td className="px-4 py-2">
-                                <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-800">
+                                <span
+                                  className="px-2 py-0.5 rounded-full text-xs font-medium border"
+                                  style={getProgramTypeBadgeStyle(a.program_type)}
+                                >
                                   {getProgramTypeLabel(a.program_type)}
                                 </span>
                               </td>
@@ -584,6 +703,7 @@ export default function AdminAnalytics() {
                               <td className="px-4 py-2 text-gray-600">{a.district || '—'}</td>
                               <td className="px-4 py-2">{a.plants_count}</td>
                               <td className="px-4 py-2">{a.participants}</td>
+                              <td className="px-4 py-2 font-medium text-amber-700 whitespace-nowrap">{formatCost(Number(a.cost) || 0)}</td>
                             </tr>
                           ))
                         )}
@@ -631,15 +751,22 @@ export default function AdminAnalytics() {
                       <th className="px-4 py-2 text-right">Programs</th>
                       <th className="px-4 py-2 text-right">Trees</th>
                       <th className="px-4 py-2 text-right">Participants</th>
+                      <th className="px-4 py-2 text-right">Total Cost</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {data.byType.map((t) => (
                       <tr key={t.program_type}>
-                        <td className="px-4 py-2 font-medium">{getProgramTypeLabel(t.program_type)}</td>
+                        <td className="px-4 py-2 font-medium">
+                          <span className="inline-flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={getProgramTypeDotStyle(t.program_type)} />
+                            {getProgramTypeLabel(t.program_type)}
+                          </span>
+                        </td>
                         <td className="px-4 py-2 text-right">{t.count}</td>
                         <td className="px-4 py-2 text-right text-green-700">{t.trees}</td>
                         <td className="px-4 py-2 text-right">{t.participants}</td>
+                        <td className="px-4 py-2 text-right font-medium text-amber-700">{formatCost(Number(t.cost) || 0)}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -3,7 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import db from "./server/db.ts";
+import db, { dbReady } from "./server/db.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -79,7 +79,22 @@ async function getHierarchyFromRangeForestOffice(rangeForestOfficeId: number): P
   }
 }
 
+function toNullable(value: unknown): string | number | null {
+  if (value === undefined || value === null || value === '') return null;
+  return value as string | number;
+}
+
+function parseCost(value: unknown, details?: Record<string, unknown>): number {
+  const raw = value ?? details?.cost;
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const num = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(/,/g, ''));
+  if (!Number.isFinite(num) || num < 0) return 0;
+  return Math.round(num * 100) / 100;
+}
+
 async function startServer() {
+  await dbReady;
+
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
@@ -218,7 +233,24 @@ async function startServer() {
 
   // Create Program
   app.post("/api/programs", async (req, res) => {
-    const { program_type, officer_id, date, description, latitude, longitude, location_name, aga_division, gn_division, plants_count, participants, details } = req.body;
+    const {
+      program_type,
+      officer_id,
+      date,
+      description,
+      latitude,
+      longitude,
+      location_name,
+      aga_division,
+      gn_division,
+      plants_count,
+      participants,
+      cost,
+      details,
+    } = req.body;
+
+    const parsedDetails =
+      details && typeof details === 'object' && !Array.isArray(details) ? details : {};
     
     try {
       // Get program type ID
@@ -228,26 +260,31 @@ async function startServer() {
         programTypeId = (insertResult as any).insertId;
       }
 
+      const resolvedAga = toNullable(aga_division ?? parsedDetails.aga_division);
+      const resolvedGn = toNullable(gn_division ?? parsedDetails.gn_division);
+      const resolvedCost = parseCost(cost, parsedDetails);
+
       const [result] = await db.execute(`
-        INSERT INTO programs (program_type_id, officer_id, date, description, latitude, longitude, location_name, aga_division, gn_division, plants_count, participants, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO programs (program_type_id, officer_id, date, description, latitude, longitude, location_name, aga_division, gn_division, plants_count, participants, cost, details)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
-        programTypeId, 
-        officer_id, 
-        date, 
-        description, 
-        latitude, 
-        longitude, 
-        location_name,
-        aga_division,
-        gn_division,
-        plants_count || 0,
-        participants || 0,
-        JSON.stringify(details || {})
+        programTypeId ?? null,
+        officer_id ?? null,
+        date ?? null,
+        toNullable(description),
+        toNullable(latitude),
+        toNullable(longitude),
+        toNullable(location_name),
+        resolvedAga,
+        resolvedGn,
+        Number(plants_count) || 0,
+        Number(participants) || 0,
+        resolvedCost,
+        JSON.stringify(parsedDetails),
       ]);
       
       const insertResult = result as any;
-      res.json({ success: true, id: insertResult.insertId });
+      res.json({ success: true, id: insertResult.insertId, cost: resolvedCost });
     } catch (err: any) {
       console.error(err);
       res.status(500).json({ success: false, message: err.message });
@@ -334,6 +371,7 @@ async function startServer() {
           COUNT(*) as total_programs,
           COALESCE(SUM(p.plants_count), 0) as total_trees,
           COALESCE(SUM(p.participants), 0) as total_participants,
+          COALESCE(SUM(p.cost), 0) as total_cost,
           COUNT(DISTINCT p.officer_id) as active_officers,
           COUNT(DISTINCT p.date) as active_days,
           MIN(p.date) as first_date,
@@ -346,7 +384,8 @@ async function startServer() {
       const [byTypeRows] = await db.execute(
         `SELECT pt.name as program_type, COUNT(*) as count,
           COALESCE(SUM(p.plants_count), 0) as trees,
-          COALESCE(SUM(p.participants), 0) as participants
+          COALESCE(SUM(p.participants), 0) as participants,
+          COALESCE(SUM(p.cost), 0) as cost
         ${analyticsJoin}
         ${whereClause}
         GROUP BY pt.name
@@ -356,7 +395,8 @@ async function startServer() {
 
       const [byDistrictRows] = await db.execute(
         `SELECT d.name as district, COUNT(*) as count,
-          COALESCE(SUM(p.plants_count), 0) as trees
+          COALESCE(SUM(p.plants_count), 0) as trees,
+          COALESCE(SUM(p.cost), 0) as cost
         ${analyticsJoin}
         ${whereClause}
         GROUP BY d.name
@@ -365,7 +405,8 @@ async function startServer() {
       );
 
       const [byZonalRows] = await db.execute(
-        `SELECT z.name as zonal_office, COUNT(*) as count
+        `SELECT z.name as zonal_office, COUNT(*) as count,
+          COALESCE(SUM(p.cost), 0) as cost
         ${analyticsJoin}
         ${whereClause}
         GROUP BY z.name
@@ -375,7 +416,8 @@ async function startServer() {
 
       const [byRangeRows] = await db.execute(
         `SELECT rfo.name as range_office, COUNT(*) as count,
-          COALESCE(SUM(p.plants_count), 0) as trees
+          COALESCE(SUM(p.plants_count), 0) as trees,
+          COALESCE(SUM(p.cost), 0) as cost
         ${analyticsJoin}
         ${whereClause}
         GROUP BY rfo.name
@@ -389,6 +431,7 @@ async function startServer() {
           COUNT(*) as count,
           COALESCE(SUM(p.plants_count), 0) as trees,
           COALESCE(SUM(p.participants), 0) as participants,
+          COALESCE(SUM(p.cost), 0) as cost,
           MIN(p.date) as first_activity,
           MAX(p.date) as last_activity,
           COUNT(DISTINCT p.date) as active_days
@@ -403,7 +446,8 @@ async function startServer() {
         `SELECT YEAR(p.date) as year, MONTH(p.date) as month,
           COUNT(*) as count,
           COALESCE(SUM(p.plants_count), 0) as trees,
-          COALESCE(SUM(p.participants), 0) as participants
+          COALESCE(SUM(p.participants), 0) as participants,
+          COALESCE(SUM(p.cost), 0) as cost
         ${analyticsJoin}
         ${whereClause}
         GROUP BY YEAR(p.date), MONTH(p.date)
@@ -413,7 +457,7 @@ async function startServer() {
 
       const [activityRows] = await db.execute(
         `SELECT p.id, p.date, pt.name as program_type, p.location_name,
-          p.description, p.plants_count, p.participants,
+          p.description, p.plants_count, p.participants, p.cost,
           o.id as officer_id, o.name as officer_name,
           rfo.name as range_forest_office, d.name as district, z.name as zonal_office
         ${analyticsJoin}
@@ -457,6 +501,7 @@ async function startServer() {
           totalPrograms: Number(summary.total_programs) || 0,
           totalTrees: Number(summary.total_trees) || 0,
           totalParticipants: Number(summary.total_participants) || 0,
+          totalCost: Number(summary.total_cost) || 0,
           activeOfficers: Number(summary.active_officers) || 0,
           activeDays: Number(summary.active_days) || 0,
           firstDate: summary.first_date,
@@ -472,6 +517,7 @@ async function startServer() {
           ...row,
           plants_count: row.plants_count || 0,
           participants: row.participants || 0,
+          cost: Number(row.cost) || 0,
         })),
         inactiveOfficers,
       });

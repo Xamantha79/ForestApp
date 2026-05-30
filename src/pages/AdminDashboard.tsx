@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Tooltip as MapTooltip, useMap } from 'react-leaflet';
@@ -7,6 +7,13 @@ import { Program, PROGRAM_TYPES } from '../types';
 import { Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { LogOut, Download, MapPin, Plus, Trash2, X, BarChart3 } from 'lucide-react';
 import L from 'leaflet';
+import {
+  getProgramTypeColor,
+  getProgramTypeMarkerIcon,
+  getProgramTypeBadgeStyle,
+  getProgramTypeDotStyle,
+  registerProgramTypes,
+} from '../utils/programTypeColors';
 
 // Fix Leaflet marker icons
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -16,7 +23,6 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
 
 // Helper to update map view
 function MapUpdater({ programs }: { programs: Program[] }) {
@@ -46,27 +52,15 @@ export default function AdminDashboard() {
   const [showProgramTypeForm, setShowProgramTypeForm] = useState(false);
   const [newProgramType, setNewProgramType] = useState({ name: '', description: '' });
   const [loading, setLoading] = useState(false);
+  const [currentDateTime, setCurrentDateTime] = useState(new Date());
 
-  const getMarkerIcon = (type: string) => {
-    let color = 'grey';
-    switch (type) {
-      case 'planting': color = 'green'; break;
-      case 'school': color = 'orange'; break;
-      case 'home_garden': color = 'red'; break;
-      case 'community': color = 'blue'; break;
-      case 'ngo': color = 'violet'; break;
-      default: color = 'grey';
-    }
-
-    return new L.Icon({
-      iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
-      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-      iconSize: [25, 41],
-      iconAnchor: [12, 41],
-      popupAnchor: [1, -34],
-      shadowSize: [41, 41]
-    });
-  };
+  useMemo(() => {
+    registerProgramTypes([
+      ...programTypes.map((t) => t.name),
+      ...programs.map((p) => p.program_type),
+      ...(stats?.byType?.map((t: { program_type: string }) => t.program_type) || []),
+    ]);
+  }, [programTypes, programs, stats]);
 
   const getProgramTypeLabel = (type: string | null | undefined) => {
     if (!type) return 'Unknown';
@@ -80,8 +74,6 @@ export default function AdminDashboard() {
       word.charAt(0).toUpperCase() + word.slice(1)
     ).join(' ');
   };
-
-  const [currentDateTime, setCurrentDateTime] = useState(new Date());
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -169,7 +161,9 @@ export default function AdminDashboard() {
   // Prepare chart data
   const typeData = stats?.byType.map((item: any) => ({
     name: getProgramTypeLabel(item.program_type),
-    value: item.count
+    value: item.count,
+    type: item.program_type,
+    color: getProgramTypeColor(item.program_type),
   })) || [];
 
   const programTypeSummary = programs.reduce<Record<string, number>>((acc, p) => {
@@ -343,14 +337,16 @@ export default function AdminDashboard() {
                     <Marker 
                       key={prog.id} 
                       position={[Number(prog.latitude), Number(prog.longitude)]}
-                      icon={getMarkerIcon(prog.program_type)}
+                      icon={getProgramTypeMarkerIcon(prog.program_type)}
                     >
                     <MapTooltip>
                       <span>{getProgramTypeLabel(prog.program_type)} - {prog.location_name}</span>
                     </MapTooltip>
                     <Popup>
                       <div className="p-1">
-                        <strong className="block text-sm text-green-700">{getProgramTypeLabel(prog.program_type)}</strong>
+                        <strong className="block text-sm" style={{ color: getProgramTypeColor(prog.program_type) }}>
+                          {getProgramTypeLabel(prog.program_type)}
+                        </strong>
                         <span className="text-xs text-gray-600">{prog.location_name}</span><br/>
                         <span className="text-xs text-gray-500">{prog.date} • {prog.officer_name}</span>
                       </div>
@@ -377,8 +373,8 @@ export default function AdminDashboard() {
                     paddingAngle={5}
                     dataKey="value"
                   >
-                    {typeData.map((entry: any, index: number) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    {typeData.map((entry: { type?: string; color?: string; name: string }, index: number) => (
+                      <Cell key={entry.type || entry.name || index} fill={entry.color || getProgramTypeColor(entry.type)} />
                     ))}
                   </Pie>
                   <Tooltip />
@@ -401,22 +397,13 @@ export default function AdminDashboard() {
           {/* Summary Counts */}
           <div className="px-6 py-3 bg-gray-50/50 border-b border-gray-100 flex flex-wrap gap-4 items-center">
             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Summary:</span>
-            {Object.entries(programTypeSummary).map(([key, count]) => {
-              let colorClass = 'bg-gray-500';
-              if (key === 'planting') colorClass = 'bg-green-500';
-              else if (key === 'school') colorClass = 'bg-orange-500';
-              else if (key === 'home_garden') colorClass = 'bg-red-500';
-              else if (key === 'community') colorClass = 'bg-blue-500';
-              else if (key === 'ngo') colorClass = 'bg-violet-500';
-
-              return (
-                <div key={key} className="flex items-center gap-2 text-sm">
-                  <span className={`w-2 h-2 rounded-full ${colorClass}`} />
-                  <span className="text-gray-600">{getProgramTypeLabel(key)}:</span>
-                  <span className="font-semibold text-gray-900">{count}</span>
-                </div>
-              );
-            })}
+            {Object.entries(programTypeSummary).map(([key, count]) => (
+              <div key={key} className="flex items-center gap-2 text-sm">
+                <span className="w-2 h-2 rounded-full shrink-0" style={getProgramTypeDotStyle(key)} />
+                <span className="text-gray-600">{getProgramTypeLabel(key)}:</span>
+                <span className="font-semibold text-gray-900">{count}</span>
+              </div>
+            ))}
             <div className="flex items-center gap-2 text-sm ml-auto border-l pl-4 border-gray-200">
               <span className="text-gray-600">Total:</span>
               <span className="font-bold text-gray-900">{programs.length}</span>
@@ -440,12 +427,10 @@ export default function AdminDashboard() {
                   <tr key={prog.id} className="hover:bg-gray-50">
                     <td className="px-6 py-3 text-gray-900">{prog.date}</td>
                     <td className="px-6 py-3">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium
-                        ${prog.program_type === 'planting' ? 'bg-green-100 text-green-700' : 
-                          prog.program_type === 'school' ? 'bg-orange-100 text-orange-700' : 
-                          prog.program_type === 'home_garden' ? 'bg-red-100 text-red-700' :
-                          prog.program_type === 'community' ? 'bg-blue-100 text-blue-700' :
-                          prog.program_type === 'ngo' ? 'bg-violet-100 text-violet-700' : 'bg-gray-100 text-gray-700'}`}>
+                      <span
+                        className="px-2 py-1 rounded-full text-xs font-medium border"
+                        style={getProgramTypeBadgeStyle(prog.program_type)}
+                      >
                         {getProgramTypeLabel(prog.program_type)}
                       </span>
                     </td>

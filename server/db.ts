@@ -98,6 +98,7 @@ async function initializeTables() {
         gn_division VARCHAR(100),
         plants_count INT DEFAULT 0,
         participants INT DEFAULT 0,
+        cost DECIMAL(12, 2) DEFAULT 0.00,
         details JSON,
         synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -112,8 +113,33 @@ async function initializeTables() {
     `);
 
     console.log('Tables initialized successfully');
+
+    await migrateProgramsCostColumn();
   } catch (error) {
     console.error('Error initializing tables:', error);
+  }
+}
+
+async function migrateProgramsCostColumn() {
+  try {
+    const [columns] = await db.execute(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'programs'
+      AND COLUMN_NAME = 'cost'
+    `);
+
+    if ((columns as any[]).length === 0) {
+      await db.execute(`
+        ALTER TABLE programs
+        ADD COLUMN cost DECIMAL(12, 2) NOT NULL DEFAULT 0.00
+        AFTER participants
+      `);
+      console.log('Added cost column to programs table');
+    }
+  } catch (error) {
+    console.error('Error migrating programs cost column:', error);
   }
 }
 
@@ -205,6 +231,6 @@ async function startDatabase() {
   await initializeTables();
 }
 
-startDatabase();
+export const dbReady = startDatabase();
 
 export default db;

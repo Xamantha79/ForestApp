@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Plus, MapPin, Upload, WifiOff, CheckCircle, LogOut } from 'lucide-react';
@@ -7,6 +7,14 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { PROGRAM_TYPES, Program } from '../types';
 import { saveOfflineProgram, getOfflinePrograms, deleteOfflineProgram } from '../services/offlineStorage';
+import CoordinateInput from '../components/CoordinateInput';
+import { coordinateDetailsFields, ResolvedCoordinates } from '../utils/coordinates';
+import {
+  getProgramTypeCardStyle,
+  getProgramTypeIconStyle,
+  getProgramTypeLabelStyle,
+  registerProgramTypes,
+} from '../utils/programTypeColors';
 
 // Fix Leaflet icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -55,64 +63,43 @@ export default function OfficerDashboard() {
     program_type: '',
     description: '',
     location_name: '',
-    latitude: '',
-    longitude: '',
     plants_count: '',
     participants: '',
+    cost: '',
     aga_division: '',
     gn_division: ''
   });
+  const [coordsResolved, setCoordsResolved] = useState<ResolvedCoordinates | null>(null);
+  const [coordInputKey, setCoordInputKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [programTypes, setProgramTypes] = useState<{id: number, name: string, description: string}[]>([]);
+  const [officerProfile, setOfficerProfile] = useState<{name: string, serviceNumber: string, rangeOffice: string} | null>(null);
+  const [showProfileForm, setShowProfileForm] = useState(false);
+
+  useMemo(() => {
+    registerProgramTypes([
+      ...programTypes.map((pt) => pt.name),
+      ...statsByType.map((s) => s.program_type),
+      ...recentPrograms.map((p) => p.program_type),
+    ]);
+  }, [programTypes, statsByType, recentPrograms]);
 
   const districts = [
-    'Ampara', 'Anuradhapura', 'Badulla', 'Batticaloa', 'Colombo', 'Galle', 'Gampaha', 
-    'Hambantota', 'Jaffna', 'Kalutara', 'Kandy', 'Kegalle', 'Kilinochchi', 'Kurunegala', 
-    'Mannar', 'Matale', 'Matara', 'Monaragala', 'Mullaitivu', 'Nuwara Eliya', 'Polonnaruwa', 
+    'Ampara', 'Anuradhapura', 'Badulla', 'Batticaloa', 'Colombo', 'Galle', 'Gampaha',
+    'Hambantota', 'Jaffna', 'Kalutara', 'Kandy', 'Kegalle', 'Kilinochchi', 'Kurunegala',
+    'Mannar', 'Matale', 'Matara', 'Monaragala', 'Mullaitivu', 'Nuwara Eliya', 'Polonnaruwa',
     'Puttalam', 'Ratnapura', 'Trincomalee', 'Vavuniya'
   ];
-
-  const getColorBase = (type: string) => {
-    // Generate consistent color based on type name
-    const colors = ['green', 'orange', 'red', 'blue', 'purple', 'pink', 'indigo', 'teal', 'amber', 'lime'];
-    const hash = type.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    return colors[hash % colors.length];
-  };
 
   const getProgramTypeLabel = (type: string) => {
     const programType = programTypes.find(pt => pt.name === type);
     if (programType) {
-      // Convert snake_case to Title Case for display
-      return programType.name.split('_').map(word => 
+      return programType.name.split('_').map(word =>
         word.charAt(0).toUpperCase() + word.slice(1)
       ).join(' ');
     }
     return PROGRAM_TYPES[type as keyof typeof PROGRAM_TYPES] || type;
   };
-
-  const getMarkerIcon = (type: string) => {
-    let color = 'grey';
-    switch (type) {
-      case 'planting': color = 'green'; break;
-      case 'school': color = 'orange'; break;
-      case 'home_garden': color = 'red'; break;
-      case 'community': color = 'blue'; break;
-      case 'ngo': color = 'violet'; break;
-      default: color = 'grey';
-    }
-
-    return new L.Icon({
-      iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
-      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-      iconSize: [25, 41],
-      iconAnchor: [12, 41],
-      popupAnchor: [1, -34],
-      shadowSize: [41, 41]
-    });
-  };
-
-  const [officerProfile, setOfficerProfile] = useState<{name: string, serviceNumber: string, rangeOffice: string} | null>(null);
-  const [showProfileForm, setShowProfileForm] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -239,24 +226,38 @@ export default function OfficerDashboard() {
     setIsSyncing(false);
   };
 
+  const parseCostInput = (value: string) => {
+    if (!value || !value.trim()) return 0;
+    const num = parseFloat(value.replace(/,/g, ''));
+    return Number.isFinite(num) && num >= 0 ? num : 0;
+  };
+
   const handleQuickEntrySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (coordsResolved && !coordsResolved.isValid) {
+      alert(coordsResolved.error || 'Please fix the coordinates before submitting.');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
+      const coordDetails = coordsResolved ? coordinateDetailsFields(coordsResolved) : {};
       const programData = {
         program_type: quickEntryForm.program_type,
         officer_id: user?.id,
         date: new Date().toISOString().split('T')[0],
         description: quickEntryForm.description,
         location_name: quickEntryForm.location_name,
-        latitude: quickEntryForm.latitude || null,
-        longitude: quickEntryForm.longitude || null,
-        plants_count: quickEntryForm.plants_count ? parseInt(quickEntryForm.plants_count) : 0,
-        participants: quickEntryForm.participants ? parseInt(quickEntryForm.participants) : 0,
+        latitude: coordsResolved?.latitude ?? null,
+        longitude: coordsResolved?.longitude ?? null,
+        plants_count: quickEntryForm.plants_count ? parseInt(quickEntryForm.plants_count, 10) : 0,
+        participants: quickEntryForm.participants ? parseInt(quickEntryForm.participants, 10) : 0,
+        cost: parseCostInput(quickEntryForm.cost),
         aga_division: quickEntryForm.aga_division || null,
         gn_division: quickEntryForm.gn_division || null,
-        details: {}
+        details: coordDetails,
       };
 
       const res = await fetch('/api/programs', {
@@ -271,13 +272,14 @@ export default function OfficerDashboard() {
           program_type: '',
           description: '',
           location_name: '',
-          latitude: '',
-          longitude: '',
           plants_count: '',
           participants: '',
+          cost: '',
           aga_division: '',
           gn_division: ''
         });
+        setCoordInputKey((k) => k + 1);
+        setCoordsResolved(null);
         setShowQuickEntry(false);
         // Refresh data
         await fetchRecentPrograms();
@@ -315,13 +317,19 @@ export default function OfficerDashboard() {
               {user?.district ? ` • ${user.district}` : ''}
             </p>
             {user?.role === 'admin' && (
-              <button 
+              <button
                 onClick={() => navigate('/admin')}
                 className="mt-2 text-xs bg-green-800/50 hover:bg-green-800 text-green-100 px-3 py-1 rounded-full flex items-center gap-1 transition"
               >
                 Go to Admin Panel →
               </button>
             )}
+            <button
+              onClick={() => navigate('/officer/new')}
+              className="mt-2 text-xs bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-full transition block"
+            >
+              Full program form →
+            </button>
           </div>
           <button onClick={logout} className="p-2 bg-green-800 rounded-full hover:bg-green-600 transition">
             <LogOut className="w-5 h-5" />
@@ -404,33 +412,6 @@ export default function OfficerDashboard() {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Latitude</label>
-                <input
-                  type="number"
-                  step="any"
-                  name="latitude"
-                  value={quickEntryForm.latitude}
-                  onChange={handleQuickEntryChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
-                  placeholder="7.8731"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Longitude</label>
-                <input
-                  type="number"
-                  step="any"
-                  name="longitude"
-                  value={quickEntryForm.longitude}
-                  onChange={handleQuickEntryChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
-                  placeholder="80.7718"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Plants Count</label>
                 <input
                   type="number"
@@ -453,6 +434,25 @@ export default function OfficerDashboard() {
                 />
               </div>
             </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Program Cost (LKR)</label>
+              <input
+                type="number"
+                name="cost"
+                min="0"
+                step="0.01"
+                value={quickEntryForm.cost}
+                onChange={handleQuickEntryChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                placeholder="0.00"
+              />
+            </div>
+
+            <CoordinateInput
+              key={coordInputKey}
+              onChange={setCoordsResolved}
+            />
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -533,10 +533,9 @@ export default function OfficerDashboard() {
               {programTypes.map((pt) => {
                 const count = mapPrograms.filter(p => p.program_type === pt.name).length;
                 if (count === 0) return null;
-                const color = getColorBase(pt.name);
                 return (
-                  <div key={pt.id} className={`bg-white p-2 rounded-lg border border-${color}-100 shadow-sm flex flex-col`}>
-                    <span className={`text-xs font-medium text-${color}-600 truncate`}>
+                  <div key={pt.id} className="p-2 rounded-lg border shadow-sm flex flex-col" style={getProgramTypeCardStyle(pt.name)}>
+                    <span className="text-xs font-medium truncate" style={getProgramTypeLabelStyle(pt.name)}>
                       {getProgramTypeLabel(pt.name)}
                     </span>
                     <span className="text-lg font-semibold text-gray-800">{count}</span>
@@ -555,17 +554,14 @@ export default function OfficerDashboard() {
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              {statsByType.map((stat) => {
-                const color = getColorBase(stat.program_type);
-                return (
-                  <div key={stat.program_type} className={`bg-white p-2 rounded-lg border border-${color}-100 shadow-sm flex flex-col`}>
-                    <span className={`text-xs font-medium text-${color}-600 truncate`}>
-                      {getProgramTypeLabel(stat.program_type)}
-                    </span>
-                    <span className="text-lg font-semibold text-gray-800">{stat.count}</span>
-                  </div>
-                );
-              })}
+              {statsByType.map((stat) => (
+                <div key={stat.program_type} className="p-2 rounded-lg border shadow-sm flex flex-col" style={getProgramTypeCardStyle(stat.program_type)}>
+                  <span className="text-xs font-medium truncate" style={getProgramTypeLabelStyle(stat.program_type)}>
+                    {getProgramTypeLabel(stat.program_type)}
+                  </span>
+                  <span className="text-lg font-semibold text-gray-800">{stat.count}</span>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -593,11 +589,9 @@ export default function OfficerDashboard() {
           {recentPrograms.length === 0 ? (
             <p className="text-gray-400 text-sm text-center py-4">No activities found.</p>
           ) : (
-            recentPrograms.map((program) => {
-              const color = getColorBase(program.program_type);
-              return (
+            recentPrograms.map((program) => (
                 <div key={program.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-start gap-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-${color}-100 text-${color}-600`}>
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={getProgramTypeIconStyle(program.program_type)}>
                     <CheckCircle className="w-5 h-5" />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -606,9 +600,12 @@ export default function OfficerDashboard() {
                       {program.location_name} • {program.district} • {program.date}
                     </p>
                     {program.latitude && program.longitude && (
-                      <p className="text-[10px] text-gray-400 font-mono mt-0.5 flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        {Number(program.latitude).toFixed(5)}, {Number(program.longitude).toFixed(5)}
+                      <p className="text-[10px] text-gray-400 font-mono mt-0.5 flex items-center gap-1 flex-wrap">
+                        <MapPin className="w-3 h-3 shrink-0" />
+                        <span>{Number(program.latitude).toFixed(5)}, {Number(program.longitude).toFixed(5)}</span>
+                        {program.details?.coordinate_mode === 'kandawala' && program.details?.kandawala_northings && (
+                          <span>· N {program.details.kandawala_northings}, E {program.details.kandawala_eastings}</span>
+                        )}
                       </p>
                     )}
                     {viewMode === 'all' && (
@@ -618,8 +615,7 @@ export default function OfficerDashboard() {
                     )}
                   </div>
                 </div>
-              );
-            })
+              ))
           )}
         </div>
       </div>
